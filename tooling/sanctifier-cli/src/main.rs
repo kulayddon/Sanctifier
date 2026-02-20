@@ -50,18 +50,25 @@ fn main() {
             
             let mut all_size_warnings = Vec::new();
             let mut all_unsafe_patterns = Vec::new();
+            let mut all_auth_gaps = Vec::new();
 
             println!("Debug: is_dir? {}, extension: {:?}", path.is_dir(), path.extension());
             if path.is_dir() {
-                analyze_directory(path, &analyzer, &mut all_size_warnings, &mut all_unsafe_patterns);
+                analyze_directory(path, &analyzer, &mut all_size_warnings, &mut all_unsafe_patterns, &mut all_auth_gaps);
             } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
                 println!("Debug: Is a .rs file");
                 if let Ok(content) = fs::read_to_string(path) {
                     let size_warnings = analyzer.analyze_ledger_size(&content);
+                    all_size_warnings.extend(size_warnings.clone());
+                    
                     let unsafe_patterns = analyzer.analyze_unsafe_patterns(&content);
-                    println!("Found {} size warnings and {} unsafe patterns in {:?}", size_warnings.len(), unsafe_patterns.len(), path);
-                    all_size_warnings.extend(size_warnings);
-                    all_unsafe_patterns.extend(unsafe_patterns);
+                    all_unsafe_patterns.extend(unsafe_patterns.clone());
+
+                    let gaps = analyzer.scan_auth_gaps(&content);
+                    for g in gaps {
+                        all_auth_gaps.push(format!("{}: {}", path.display(), g));
+                    }
+                    println!("Found {} size warnings, {} unsafe patterns, and {} auth gaps in {:?}", size_warnings.len(), unsafe_patterns.len(), gaps.len(), path);
                 } else {
                     println!("Debug: Failed to read file {:?}", path);
                 }
@@ -75,6 +82,7 @@ fn main() {
                 let output = serde_json::json!({
                     "size_warnings": all_size_warnings,
                     "unsafe_patterns": all_unsafe_patterns,
+                    "auth_gaps": all_auth_gaps,
                 });
                 println!("{}", serde_json::to_string_pretty(&output).unwrap_or_else(|_| "{}".to_string()));
             } else {
@@ -108,6 +116,15 @@ fn main() {
                         );
                     }
                 }
+
+                if !all_auth_gaps.is_empty() {
+                    println!("\n{} Found potential Authentication Gaps!", "🛑".red());
+                    for gap in all_auth_gaps {
+                        println!("   {} Function {} is modifying state without require_auth()", "->".red(), gap.bold());
+                    }
+                } else {
+                    println!("\nNo authentication gaps found.");
+                }
             }
         },
         Commands::Report { output } => {
@@ -129,13 +146,14 @@ fn analyze_directory(
     dir: &Path, 
     analyzer: &Analyzer, 
     all_size_warnings: &mut Vec<SizeWarning>,
-    all_unsafe_patterns: &mut Vec<UnsafePattern>
+    all_unsafe_patterns: &mut Vec<UnsafePattern>,
+    all_auth_gaps: &mut Vec<String>
 ) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                analyze_directory(&path, analyzer, all_size_warnings, all_unsafe_patterns);
+                analyze_directory(&path, analyzer, all_size_warnings, all_unsafe_patterns, all_auth_gaps);
             } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
                 if let Ok(content) = fs::read_to_string(&path) {
                     let warnings = analyzer.analyze_ledger_size(&content);
@@ -148,6 +166,11 @@ fn analyze_directory(
                     for mut p in patterns {
                         p.snippet = format!("{}:{}", path.display(), p.snippet);
                         all_unsafe_patterns.push(p);
+                    }
+
+                    let gaps = analyzer.scan_auth_gaps(&content);
+                    for g in gaps {
+                        all_auth_gaps.push(format!("{}: {}", path.display(), g));
                     }
                 }
             }
