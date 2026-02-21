@@ -1,4 +1,5 @@
 <<<<<<< HEAD
+<<<<<<< HEAD
 use soroban_sdk::Env;
 use syn::{parse_str, File, Item, Type, Fields, Meta, ExprMethodCall, Macro};
 use syn::visit::{self, Visit};
@@ -6,15 +7,94 @@ use syn::spanned::Spanned;
 use serde::{Serialize, Deserialize};
 use thiserror::Error;
 use std::collections::HashSet;
+=======
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use syn::spanned::Spanned;
+use syn::visit::{self, Visit};
+use syn::{parse_str, Fields, File, Item, Meta, Type};
+use soroban_sdk::Env;
+
+// ── Existing types ────────────────────────────────────────────────────────────
+
+/// Severity of a ledger size warning.
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub enum SizeWarningLevel {
+    /// Size exceeds the ledger entry limit (e.g. 64KB).
+    ExceedsLimit,
+    /// Size is approaching the limit (configurable threshold, e.g. 80%).
+    ApproachingLimit,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct SizeWarning {
+    pub struct_name: String,
+    pub estimated_size: usize,
+    pub limit: usize,
+    pub level: SizeWarningLevel,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct PanicIssue {
+    pub function_name: String,
+    pub issue_type: String, // "panic!", "unwrap", "expect"
+    pub location: String,
+}
+
+// ── UnsafePattern types (visitor-based panic/unwrap scanning) ─────────────────
+
+#[derive(Debug, Serialize, Clone)]
+pub enum PatternType {
+    Panic,
+    Unwrap,
+    Expect,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct UnsafePattern {
+    pub pattern_type: PatternType,
+    pub line: usize,
+    pub snippet: String,
+}
+
+// ── ArithmeticIssue (NEW) ─────────────────────────────────────────────────────
+
+/// Represents an unchecked arithmetic operation that could overflow or underflow.
+#[derive(Debug, Serialize, Clone)]
+pub struct ArithmeticIssue {
+    /// Contract function in which the operation was found.
+    pub function_name: String,
+    /// The operator: "+", "-", "*", "+=", "-=", "*=".
+    pub operation: String,
+    /// Human-readable suggestion pointing to the safe alternative.
+    pub suggestion: String,
+    /// "function_name:line" context string.
+    pub location: String,
+}
+>>>>>>> ac60595 (ledger entry size analysis)
 
 // ── Configuration ─────────────────────────────────────────────────────────────
+
+/// Default Soroban ledger entry size limit (64KB). Check network config for current value.
+pub const DEFAULT_LEDGER_ENTRY_LIMIT: usize = 64 * 1024;
+
+/// Default threshold (0.8) for "approaching" warnings: warn when size > 80% of limit.
+pub const DEFAULT_APPROACHING_THRESHOLD: f64 = 0.8;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SanctifyConfig {
     pub ignore_paths: Vec<String>,
     pub enabled_rules: Vec<String>,
+    /// Ledger entry size limit in bytes (e.g. 64KB). Soroban has limits on stored data.
     pub ledger_limit: usize,
+    /// Ratio (0.0–1.0) at which to warn "approaching limit". Default 0.8 = warn at 80%.
+    #[serde(default = "default_approaching_threshold")]
+    pub approaching_threshold: f64,
     pub strict_mode: bool,
+}
+
+fn default_approaching_threshold() -> f64 {
+    DEFAULT_APPROACHING_THRESHOLD
 }
 
 impl Default for SanctifyConfig {
@@ -27,12 +107,14 @@ impl Default for SanctifyConfig {
                 "arithmetic".to_string(),
                 "ledger_size".to_string(),
             ],
-            ledger_limit: 64000,
+            ledger_limit: DEFAULT_LEDGER_ENTRY_LIMIT,
+            approaching_threshold: default_approaching_threshold(),
             strict_mode: false,
         }
     }
 }
 
+<<<<<<< HEAD
 // ── Existing types ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Clone)]
@@ -91,6 +173,34 @@ pub struct Finding {
     pub file: String,
     pub line: usize,
     pub message: String,
+=======
+fn has_contracttype(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        if let Meta::Path(path) = &attr.meta {
+            path.is_ident("contracttype") || path.segments.iter().any(|s| s.ident == "contracttype")
+        } else {
+            false
+        }
+    })
+}
+
+fn classify_size(
+    size: usize,
+    limit: usize,
+    approaching: usize,
+    strict: bool,
+    strict_threshold: usize,
+) -> Option<SizeWarningLevel> {
+    if size > limit {
+        Some(SizeWarningLevel::ExceedsLimit)
+    } else if size > approaching {
+        Some(SizeWarningLevel::ApproachingLimit)
+    } else if strict && size > strict_threshold {
+        Some(SizeWarningLevel::ApproachingLimit)
+    } else {
+        None
+    }
+>>>>>>> ac60595 (ledger entry size analysis)
 }
 
 // ── Analyzer ──────────────────────────────────────────────────────────────────
@@ -110,16 +220,21 @@ impl Analyzer {
             Err(_) => return vec![],
         };
         let mut gaps = Vec::new();
+<<<<<<< HEAD
         for item in file.items {
+=======
+        for item in &file.items {
+>>>>>>> ac60595 (ledger entry size analysis)
             if let Item::Impl(i) = item {
                 for impl_item in &i.items {
                     if let syn::ImplItem::Fn(f) = impl_item {
                         if let syn::Visibility::Public(_) = f.vis {
+                            let fn_name = f.sig.ident.to_string();
                             let mut has_mutation = false;
                             let mut has_auth = false;
                             self.check_fn_body(&f.block, &mut has_mutation, &mut has_auth);
                             if has_mutation && !has_auth {
-                                gaps.push(f.sig.ident.to_string());
+                                gaps.push(fn_name);
                             }
                         }
                     }
@@ -251,9 +366,21 @@ impl Analyzer {
 
     pub fn check_storage_collisions(&self, _keys: Vec<String>) -> bool { false }
 
+<<<<<<< HEAD
+=======
+    pub fn check_storage_collisions(&self, _keys: Vec<String>) -> bool {
+        false
+    }
+
+    // ── Ledger size analysis ──────────────────────────────────────────────────
+
+    /// Analyzes `#[contracttype]` structs and enums, estimates serialized size,
+    /// and warns when approaching or exceeding the ledger entry limit (e.g. 64KB).
+>>>>>>> ac60595 (ledger entry size analysis)
     pub fn analyze_ledger_size(&self, source: &str) -> Vec<SizeWarning> {
         let file = match parse_str::<File>(source) { Ok(f) => f, Err(_) => return vec![], };
         let mut warnings = Vec::new();
+<<<<<<< HEAD
         for item in file.items {
             if let Item::Struct(s) = item {
                 let has_contracttype = s.attrs.iter().any(|attr| {
@@ -265,6 +392,43 @@ impl Analyzer {
                         warnings.push(SizeWarning { struct_name: s.ident.to_string(), estimated_size: size, limit: self.config.ledger_limit });
                     }
                 }
+=======
+        let limit = self.config.ledger_limit;
+        let approaching = (limit as f64 * self.config.approaching_threshold) as usize;
+        let strict = self.config.strict_mode;
+        let strict_threshold = limit / 2;
+
+        for item in &file.items {
+            match item {
+                Item::Struct(s) => {
+                    if has_contracttype(&s.attrs) {
+                        let size = self.estimate_struct_size(s);
+                        if let Some(level) = classify_size(size, limit, approaching, strict, strict_threshold) {
+                            warnings.push(SizeWarning {
+                                struct_name: s.ident.to_string(),
+                                estimated_size: size,
+                                limit,
+                                level,
+                            });
+                        }
+                    }
+                }
+                Item::Enum(e) => {
+                    if has_contracttype(&e.attrs) {
+                        let size = self.estimate_enum_size(e);
+                        if let Some(level) = classify_size(size, limit, approaching, strict, strict_threshold) {
+                            warnings.push(SizeWarning {
+                                struct_name: e.ident.to_string(),
+                                estimated_size: size,
+                                limit,
+                                level,
+                            });
+                        }
+                    }
+                }
+                Item::Impl(_) | Item::Macro(_) => {}
+                _ => {}
+>>>>>>> ac60595 (ledger entry size analysis)
             }
         }
         warnings
@@ -284,6 +448,34 @@ impl Analyzer {
         visitor.issues
     }
 
+<<<<<<< HEAD
+=======
+    // ── Size estimation helpers ───────────────────────────────────────────────
+
+    fn estimate_enum_size(&self, e: &syn::ItemEnum) -> usize {
+        const DISCRIMINANT_SIZE: usize = 4;
+        let mut max_variant = 0usize;
+        for v in &e.variants {
+            let mut variant_size = 0;
+            match &v.fields {
+                syn::Fields::Named(fields) => {
+                    for f in &fields.named {
+                        variant_size += self.estimate_type_size(&f.ty);
+                    }
+                }
+                syn::Fields::Unnamed(fields) => {
+                    for f in &fields.unnamed {
+                        variant_size += self.estimate_type_size(&f.ty);
+                    }
+                }
+                syn::Fields::Unit => {}
+            }
+            max_variant = max_variant.max(variant_size);
+        }
+        DISCRIMINANT_SIZE + max_variant
+    }
+
+>>>>>>> ac60595 (ledger entry size analysis)
     fn estimate_struct_size(&self, s: &syn::ItemStruct) -> usize {
         let mut total = 0;
         match &s.fields {
@@ -298,22 +490,213 @@ impl Analyzer {
         match ty {
             Type::Path(tp) => {
                 if let Some(seg) = tp.path.segments.last() {
-                    match seg.ident.to_string().as_str() {
+                    let base = match seg.ident.to_string().as_str() {
                         "u32" | "i32" | "bool" => 4,
                         "u64" | "i64" => 8,
                         "u128" | "i128" | "I128" | "U128" => 16,
                         "Address" => 32,
                         "Bytes" | "BytesN" | "String" | "Symbol" => 64,
-                        "Vec" | "Map" => 128,
+                        "Vec" => {
+                            if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
+                                if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
+                                    return 8 + self.estimate_type_size(inner);
+                                }
+                            }
+                            128
+                        }
+                        "Map" => {
+                            if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
+                                let inner: usize = args.args.iter().filter_map(|a| {
+                                    if let syn::GenericArgument::Type(t) = a {
+                                        Some(self.estimate_type_size(t))
+                                    } else {
+                                        None
+                                    }
+                                }).sum();
+                                if inner > 0 {
+                                    return 16 + inner * 2;
+                                }
+                            }
+                            128
+                        }
+                        "Option" => {
+                            if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
+                                if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
+                                    return 1 + self.estimate_type_size(inner);
+                                }
+                            }
+                            32
+                        }
                         _ => 32,
+<<<<<<< HEAD
                     }
                 } else { 8 }
+=======
+                    };
+                    base
+                } else {
+                    8
+                }
+>>>>>>> ac60595 (ledger entry size analysis)
+            }
+            Type::Array(arr) => {
+                if let syn::Expr::Lit(expr_lit) = &arr.len {
+                    if let syn::Lit::Int(lit) = &expr_lit.lit {
+                        if let Ok(n) = lit.base10_parse::<usize>() {
+                            return n * self.estimate_type_size(&arr.elem);
+                        }
+                    }
+                }
+                64
             }
             _ => 8,
         }
     }
 }
 
+<<<<<<< HEAD
+=======
+// ── UnsafeVisitor ─────────────────────────────────────────────────────────────
+
+struct UnsafeVisitor {
+    patterns: Vec<UnsafePattern>,
+}
+
+impl<'ast> Visit<'ast> for UnsafeVisitor {
+    fn visit_expr_method_call(&mut self, i: &'ast syn::ExprMethodCall) {
+        let method_name = i.method.to_string();
+        if method_name == "unwrap" || method_name == "expect" {
+            let pattern_type = if method_name == "unwrap" {
+                PatternType::Unwrap
+            } else {
+                PatternType::Expect
+            };
+            self.patterns.push(UnsafePattern {
+                pattern_type,
+                snippet: quote::quote!(#i).to_string(),
+                line: 0, // Simplified for now
+            });
+        }
+        visit::visit_expr_method_call(self, i);
+    }
+
+    fn visit_expr_macro(&mut self, i: &'ast syn::ExprMacro) {
+        if i.mac.path.is_ident("panic") {
+            self.patterns.push(UnsafePattern {
+                pattern_type: PatternType::Panic,
+                snippet: quote::quote!(#i).to_string(),
+                line: 0,
+            });
+        }
+        visit::visit_expr_macro(self, i);
+    }
+}
+
+/// Trait for runtime invariant checking. Implement to enforce contract invariants.
+pub trait SanctifiedGuard {
+    fn check_invariant(&self, env: &Env) -> Result<(), String>;
+}
+
+// ── ArithVisitor ──────────────────────────────────────────────────────────────
+
+struct ArithVisitor {
+    issues: Vec<ArithmeticIssue>,
+    /// Name of the function currently being visited.
+    current_fn: Option<String>,
+    /// De-duplicates issues: one per (function_name, operator) pair.
+    seen: HashSet<(String, String)>,
+}
+
+impl ArithVisitor {
+    /// Returns `(operator_str, suggestion_text)` for overflow-prone binary ops,
+    /// or `None` for operators that cannot overflow (comparisons, bitwise, etc).
+    fn classify_op(op: &syn::BinOp) -> Option<(&'static str, &'static str)> {
+        match op {
+            syn::BinOp::Add(_) => Some((
+                "+",
+                "Use `.checked_add(rhs)` or `.saturating_add(rhs)` to handle overflow",
+            )),
+            syn::BinOp::Sub(_) => Some((
+                "-",
+                "Use `.checked_sub(rhs)` or `.saturating_sub(rhs)` to handle underflow",
+            )),
+            syn::BinOp::Mul(_) => Some((
+                "*",
+                "Use `.checked_mul(rhs)` or `.saturating_mul(rhs)` to handle overflow",
+            )),
+            syn::BinOp::AddAssign(_) => Some((
+                "+=",
+                "Replace `a += b` with `a = a.checked_add(b).expect(\"overflow\")`",
+            )),
+            syn::BinOp::SubAssign(_) => Some((
+                "-=",
+                "Replace `a -= b` with `a = a.checked_sub(b).expect(\"underflow\")`",
+            )),
+            syn::BinOp::MulAssign(_) => Some((
+                "*=",
+                "Replace `a *= b` with `a = a.checked_mul(b).expect(\"overflow\")`",
+            )),
+            _ => None,
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for ArithVisitor {
+    /// Track the current function when descending into an impl method.
+    fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
+        let prev = self.current_fn.take();
+        self.current_fn = Some(node.sig.ident.to_string());
+        visit::visit_impl_item_fn(self, node);
+        self.current_fn = prev;
+    }
+
+    /// Also handle top-level `fn` items (helper functions outside impls).
+    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+        let prev = self.current_fn.take();
+        self.current_fn = Some(node.sig.ident.to_string());
+        visit::visit_item_fn(self, node);
+        self.current_fn = prev;
+    }
+
+    fn visit_expr_binary(&mut self, node: &'ast syn::ExprBinary) {
+        if let Some(fn_name) = self.current_fn.clone() {
+            if let Some((op_str, suggestion)) = Self::classify_op(&node.op) {
+                // Skip concatenation of string literals (false positive for `+`)
+                if !is_string_literal(&node.left) && !is_string_literal(&node.right) {
+                    let key = (fn_name.clone(), op_str.to_string());
+                    if !self.seen.contains(&key) {
+                        self.seen.insert(key);
+                        // Line number from the left operand's span
+                        let line = node.left.span().start().line;
+                        self.issues.push(ArithmeticIssue {
+                            function_name: fn_name.clone(),
+                            operation: op_str.to_string(),
+                            suggestion: suggestion.to_string(),
+                            location: format!("{}:{}", fn_name, line),
+                        });
+                    }
+                }
+            }
+        }
+        // Continue descending so nested binary ops are also checked
+        visit::visit_expr_binary(self, node);
+    }
+}
+
+/// Returns `true` if the expression is a string literal — used to avoid
+/// false-positives on `+` for string concatenation (rare in no_std Soroban
+/// but included for correctness).
+fn is_string_literal(expr: &syn::Expr) -> bool {
+    matches!(
+        expr,
+        syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Str(_),
+            ..
+        })
+    )
+}
+
+>>>>>>> ac60595 (ledger entry size analysis)
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -335,6 +718,33 @@ mod tests {
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].struct_name, "ExceedsLimit");
         assert_eq!(warnings[0].estimated_size, 64);
+        assert_eq!(warnings[0].level, SizeWarningLevel::ExceedsLimit);
+    }
+
+    #[test]
+    fn test_ledger_size_enum_and_approaching() {
+        let mut config = SanctifyConfig::default();
+        config.ledger_limit = 100;
+        config.approaching_threshold = 0.5;
+        let analyzer = Analyzer::new(config);
+        let source = r#"
+            #[contracttype]
+            pub enum DataKey {
+                Balance(Address),
+                Admin,
+            }
+
+            #[contracttype]
+            pub struct NearLimit {
+                pub a: u128,
+                pub b: u128,
+                pub c: u128,
+                pub d: u128,
+            }
+        "#;
+        let warnings = analyzer.analyze_ledger_size(source);
+        assert!(warnings.iter().any(|w| w.struct_name == "NearLimit"), "NearLimit (64 bytes) should exceed 50% of 100");
+        assert!(warnings.iter().any(|w| w.level == SizeWarningLevel::ApproachingLimit));
     }
 
     #[test]
