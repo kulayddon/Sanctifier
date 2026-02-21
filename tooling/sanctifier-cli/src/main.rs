@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use colored::*;
 use std::fs;
 use std::path::{Path, PathBuf};
-use sanctifier_core::{Analyzer, ArithmeticIssue, SizeWarning, SizeWarningLevel, UnsafePattern, PatternType, Finding, SanctifyConfig, CustomRuleMatch};
+use sanctifier_core::{Analyzer, ArithmeticIssue, SizeWarning, SizeWarningLevel, UnsafePattern, PatternType, Finding, SanctifyConfig, CustomRuleMatch, GasEstimation};
 
 #[derive(Parser)]
 #[command(name = "sanctifier")]
@@ -50,8 +50,9 @@ fn main() {
             let mut all_panic_issues = Vec::new();
             let mut all_arithmetic_issues = Vec::new();
             let mut all_custom_rule_matches = Vec::new();
+            let mut all_gas_estimations = Vec::new();
             if path.is_dir() {
-                analyze_directory(path, &analyzer, &mut all_size_warnings, &mut all_unsafe_patterns, &mut all_auth_gaps, &mut all_panic_issues, &mut all_arithmetic_issues, &mut all_custom_rule_matches);
+                analyze_directory(path, &analyzer, &mut all_size_warnings, &mut all_unsafe_patterns, &mut all_auth_gaps, &mut all_panic_issues, &mut all_arithmetic_issues, &mut all_custom_rule_matches, &mut all_gas_estimations);
             } else {
                 if let Ok(content) = fs::read_to_string(path) {
                     all_size_warnings.extend(analyzer.analyze_ledger_size(&content));
@@ -65,6 +66,7 @@ fn main() {
                     for mut x in ar { x.location = format!("{}: {}", path.display(), x.location); all_arithmetic_issues.push(x); }
                     let cust = analyzer.analyze_custom_rules(&content);
                     for mut x in cust { x.snippet = format!("{}: {}", path.display(), x.snippet); all_custom_rule_matches.push(x); }
+                    all_gas_estimations.extend(analyzer.scan_gas_estimation(&content));
                 }
             }
             if is_json {
@@ -78,6 +80,7 @@ fn main() {
                 for p in &all_panic_issues { findings.push(Finding { severity: "warning".to_string(), file: p.location.clone(), line: 0, message: format!("Explicit panic: {}", p.issue_type) }); }
                 for a in &all_arithmetic_issues { findings.push(Finding { severity: "warning".to_string(), file: a.location.clone(), line: 0, message: format!("Unchecked `{}`: {}", a.operation, a.suggestion) }); }
                 for c in &all_custom_rule_matches { findings.push(Finding { severity: "warning".to_string(), file: c.snippet.clone(), line: c.line, message: format!("Custom rule match: {}", c.rule_name) }); }
+                for gas in &all_gas_estimations { findings.push(Finding { severity: "info".to_string(), file: gas.function_name.clone(), line: 0, message: format!("Estimated Gas: {}", gas.estimated_gas) }); }
                 println!("{}", serde_json::to_string_pretty(&findings).unwrap());
             } else {
                 if all_size_warnings.is_empty() && all_unsafe_patterns.is_empty() && all_auth_gaps.is_empty() && all_panic_issues.is_empty() && all_arithmetic_issues.is_empty() && all_custom_rule_matches.is_empty() { println!("No issues found."); } else {
@@ -88,6 +91,10 @@ fn main() {
                     for gap in &all_auth_gaps { println!("{} Auth Gap: {}", "🛑".red(), gap); }
                     for ar in &all_arithmetic_issues { println!("{} Unchecked {}: {} ({})", "🔢".yellow(), ar.operation, ar.suggestion, ar.location); }
                     for c in &all_custom_rule_matches { println!("{} Custom Rule {}: {} (Line: {})", "📜".yellow(), c.rule_name.bold(), c.snippet.italic(), c.line); }
+                    if !all_gas_estimations.is_empty() {
+                        println!("\n{} Gas Estimation Report:", "⛽".blue());
+                        for gas in &all_gas_estimations { println!("   - {}: {} units", gas.function_name.bold(), gas.estimated_gas.to_string().cyan()); }
+                    }
                 }
             }
         }
@@ -114,11 +121,11 @@ fn is_soroban_project(path: &Path) -> bool {
     fs::read_to_string(cargo).map(|c| c.contains("soroban-sdk")).unwrap_or(false)
 }
 
-fn analyze_directory(dir: &Path, analyzer: &Analyzer, all_size_warnings: &mut Vec<SizeWarning>, all_unsafe_patterns: &mut Vec<UnsafePattern>, all_auth_gaps: &mut Vec<String>, all_panic_issues: &mut Vec<sanctifier_core::PanicIssue>, all_arithmetic_issues: &mut Vec<ArithmeticIssue>, all_custom_rule_matches: &mut Vec<CustomRuleMatch>) {
+fn analyze_directory(dir: &Path, analyzer: &Analyzer, all_size_warnings: &mut Vec<SizeWarning>, all_unsafe_patterns: &mut Vec<UnsafePattern>, all_auth_gaps: &mut Vec<String>, all_panic_issues: &mut Vec<sanctifier_core::PanicIssue>, all_arithmetic_issues: &mut Vec<ArithmeticIssue>, all_custom_rule_matches: &mut Vec<CustomRuleMatch>, all_gas_estimations: &mut Vec<GasEstimation>) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() { analyze_directory(&path, analyzer, all_size_warnings, all_unsafe_patterns, all_auth_gaps, all_panic_issues, all_arithmetic_issues, all_custom_rule_matches); } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+            if path.is_dir() { analyze_directory(&path, analyzer, all_size_warnings, all_unsafe_patterns, all_auth_gaps, all_panic_issues, all_arithmetic_issues, all_custom_rule_matches, all_gas_estimations); } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
                 if let Ok(content) = fs::read_to_string(&path) {
                     let w = analyzer.analyze_ledger_size(&content);
                     for mut x in w { x.struct_name = format!("{}: {}", path.display(), x.struct_name); all_size_warnings.push(x); }
@@ -132,6 +139,7 @@ fn analyze_directory(dir: &Path, analyzer: &Analyzer, all_size_warnings: &mut Ve
                     for mut x in ar { x.location = format!("{}: {}", path.display(), x.location); all_arithmetic_issues.push(x); }
                     let cust = analyzer.analyze_custom_rules(&content);
                     for mut x in cust { x.snippet = format!("{}: {}", path.display(), x.snippet); all_custom_rule_matches.push(x); }
+                    all_gas_estimations.extend(analyzer.scan_gas_estimation(&content));
                 }
             }
         }

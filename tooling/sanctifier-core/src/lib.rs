@@ -391,6 +391,7 @@ mod tests {
         assert_eq!(warnings[0].level, SizeWarningLevel::ExceedsLimit);
     }
 }
+<<<<<<< HEAD
 
 // ── Visitors ──────────────────────────────────────────────────────────────────
 
@@ -470,3 +471,6 @@ impl<'ast> Visit<'ast> for ArithVisitor {
 fn is_string_literal(expr: &syn::Expr) -> bool {
     matches!(expr, syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(_), .. }))
 }
+=======
+pub mod gas_estimator;\npub mod gas_report;
+>>>>>>> c6b84c2 (feat(gas): implement gas estimation report for public functions)
