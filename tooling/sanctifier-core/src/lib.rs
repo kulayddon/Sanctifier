@@ -140,10 +140,15 @@ impl Analyzer {
                         self.check_expr_panics(&init.expr, fn_name, issues);
                     }
                 }
+<<<<<<< HEAD
                 // In syn 2.0, bare macro calls (e.g. `panic!(...)`) are Stmt::Macro,
                 // not Stmt::Expr(Expr::Macro(...)).
                 syn::Stmt::Macro(m) => {
                     if m.mac.path.is_ident("panic") {
+=======
+                syn::Stmt::Macro(stmt_macro) => {
+                    if stmt_macro.mac.path.is_ident("panic") {
+>>>>>>> 3839afc (fix(core): detect standalone panic!() macros in check_fn_panics)
                         issues.push(PanicIssue {
                             function_name: fn_name.to_string(),
                             issue_type: "panic!".to_string(),
