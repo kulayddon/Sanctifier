@@ -272,4 +272,3 @@ fn test_json_output_validates_against_schema() {
         );
     }
 }
-}

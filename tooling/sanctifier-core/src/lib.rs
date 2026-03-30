@@ -1,25 +1,33 @@
-<<<<<<< HEAD
-use soroban_sdk::Env;
-use syn::{parse_str, File, Item, Type, Fields, Meta};
-use syn::visit::{self, Visit};
-use syn::spanned::Spanned;
-use serde::{Serialize, Deserialize};
-use thiserror::Error;
-use std::collections::HashSet;
-use std::panic::{self, AssertUnwindSafe};
-use regex::Regex;
-=======
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::panic::{self, AssertUnwindSafe};
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::{parse_str, Fields, File, Item, Meta, Type};
-
 use soroban_sdk::Env;
->>>>>>> 6856cf4 (closes 47)
+use thiserror::Error;
+use regex::Regex;
 
+pub mod rules;
 pub mod gas_estimator;
 pub mod gas_report;
+pub mod sep41;
+pub mod complexity;
+pub mod finding_codes;
+pub mod patcher;
+pub mod reentrancy;
+pub mod storage_collision;
+pub mod smt;
+
+// Re-export common types for easier CLI access
+pub use rules::{Patch, Rule, RuleRegistry, RuleViolation, Severity};
+pub use finding_codes::FindingSeverity as RuleSeverity;
+pub use finding_codes::FindingSeverity;
+pub use sep41::{Sep41Issue, Sep41IssueKind, Sep41VerificationReport};
+pub use storage_collision::StorageCollisionIssue;
+pub use smt::SmtInvariantIssue;
+pub use reentrancy::ReentrancyEdge;
+pub use complexity::{ContractMetrics, FunctionMetrics};
 
 // ── Panic Guard ───────────────────────────────────────────────────────────────
 
@@ -45,6 +53,8 @@ pub struct CustomRule {
     pub pattern: String,
     #[serde(default)]
     pub description: String,
+    #[serde(default)]
+    pub severity: finding_codes::FindingSeverity,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -107,8 +117,6 @@ pub struct UnsafePattern {
     pub snippet: String,
 }
 
-<<<<<<< HEAD
-=======
 // ── Upgrade analysis types ────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Clone)]
@@ -184,7 +192,6 @@ fn is_init_fn(name: &str) -> bool {
 // ── ArithmeticIssue (NEW) ─────────────────────────────────────────────────────
 
 /// Represents an unchecked arithmetic operation that could overflow or underflow.
->>>>>>> 6856cf4 (closes 47)
 #[derive(Debug, Serialize, Clone)]
 pub struct PanicIssue {
     pub function_name: String,
@@ -198,6 +205,28 @@ pub struct ArithmeticIssue {
     pub operation: String,
     pub suggestion: String,
     pub location: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct AuthGapIssue {
+    pub function_name: String,
+    pub location: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct EventIssue {
+    pub event_name: String,
+    pub issue_type: String,
+    pub location: String,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct UnhandledResultIssue {
+    pub function_name: String,
+    pub call_expression: String,
+    pub location: String,
+    pub message: String,
 }
 
 /// A match from a custom regex rule.
@@ -246,8 +275,32 @@ pub struct Analyzer {
 
 impl Analyzer {
     pub fn new(config: SanctifyConfig) -> Self { Self { config } }
+    pub fn run_rule(&self, source: &str, rule_name: &str) -> Vec<RuleViolation> {
+        let registry = rules::RuleRegistry::with_default_rules();
+        registry.run_by_name(source, rule_name)
+    }
 
-<<<<<<< HEAD
+    pub fn verify_sep41_interface(&self, source: &str) -> sep41::Sep41VerificationReport {
+        sep41::verify(source)
+    }
+
+    pub fn analyze_complexity(
+        &self,
+        source: &str,
+        path: &str,
+    ) -> Result<complexity::ContractMetrics, syn::Error> {
+        complexity::analyze_complexity_from_source(source, path)
+    }
+
+    pub fn scan_invoke_contract_calls(
+        &self,
+        source: &str,
+        _contract_name: &str,
+        _file_path: &str,
+    ) -> Vec<reentrancy::ReentrancyEdge> {
+        reentrancy::scan_invoke_contract_calls(source)
+    }
+
     pub fn analyze_custom_rules(&self, source: &str) -> Vec<CustomRuleMatch> {
         let mut matches = Vec::new();
         for rule in &self.config.rules {
@@ -255,44 +308,23 @@ impl Analyzer {
             for (line_no, line) in source.lines().enumerate() {
                 if re.find(line).is_some() {
                     matches.push(CustomRuleMatch { rule_name: rule.name.clone(), line: line_no + 1, snippet: line.trim().to_string() });
-=======
-    pub fn scan_auth_gaps(&self, source: &str) -> Vec<String> {
-        let file = match parse_str::<File>(source) {
-            Ok(f) => f,
-            Err(_) => return vec![],
-        };
-
-        let mut gaps = Vec::new();
-
-        for item in &file.items {
-            if let Item::Impl(i) = item {
-                for impl_item in &i.items {
-                    if let syn::ImplItem::Fn(f) = impl_item {
-                        let fn_name = f.sig.ident.to_string();
-                        let mut has_mutation = false;
-                        let mut has_auth = false;
-                        self.check_fn_body(&f.block, &mut has_mutation, &mut has_auth);
-                        if has_mutation && !has_auth {
-                            gaps.push(fn_name);
-                        }
-                    }
->>>>>>> 6856cf4 (closes 47)
                 }
             }
         }
         matches
     }
 
-<<<<<<< HEAD
     pub fn scan_auth_gaps(&self, source: &str) -> Vec<String> {
         with_panic_guard(|| self.scan_auth_gaps_impl(source))
     }
 
     fn scan_auth_gaps_impl(&self, source: &str) -> Vec<String> {
-        let file = match parse_str::<File>(source) { Ok(f) => f, Err(_) => return vec![] };
+        let file = match parse_str::<File>(source) {
+            Ok(f) => f,
+            Err(_) => return vec![],
+        };
+
         let mut gaps = Vec::new();
-=======
->>>>>>> 6856cf4 (closes 47)
         for item in &file.items {
             if let Item::Impl(i) = item {
                 for impl_item in &i.items {
@@ -411,7 +443,16 @@ impl Analyzer {
         }
     }
 
-    pub fn check_storage_collisions(&self, _keys: Vec<String>) -> bool { false }
+    pub fn scan_storage_collisions(&self, source: &str) -> Vec<StorageCollisionIssue> {
+        let file = match parse_str::<File>(source) {
+            Ok(f) => f,
+            Err(_) => return vec![],
+        };
+        let mut visitor = storage_collision::StorageVisitor::new();
+        syn::visit::visit_file(&mut visitor, &file);
+        visitor.final_check();
+        visitor.collisions
+    }
 
     pub fn analyze_ledger_size(&self, source: &str) -> Vec<SizeWarning> {
         with_panic_guard(|| self.analyze_ledger_size_impl(source))
@@ -471,20 +512,17 @@ impl Analyzer {
         visitor.issues
     }
 
-<<<<<<< HEAD
     pub fn scan_gas_estimation(&self, source: &str) -> Vec<GasEstimation> {
-        let file = match parse_str::<File>(source) { Ok(f) => f, Err(_) => return vec![] };
-        let mut estimator = gas_estimator::GasEstimator::new();
-        let mut estimations = Vec::new();
-        for item in &file.items {
-            if let Item::Impl(i) = item {
-                for impl_item in &i.items {
-                    if let syn::ImplItem::Fn(f) = impl_item {
-                        if let syn::Visibility::Public(_) = f.vis {
-                            let fn_name = f.sig.ident.to_string();
-                            let gas = estimator.estimate_gas(&f.block);
-                            estimations.push(GasEstimation { function_name: fn_name, estimated_gas: gas, complexity_score: 0 });
-=======
+        let reports = gas_estimator::GasEstimator::new().estimate_contract(source);
+        reports.into_iter().map(|r| {
+            GasEstimation {
+                function_name: r.function_name,
+                estimated_gas: r.estimated_instructions as u64,
+                complexity_score: 0,
+            }
+        }).collect()
+    }
+
     // ── Upgrade pattern analysis ──────────────────────────────────────────────
 
     /// Analyzes contracts for upgrade mechanisms, init patterns, storage layout
@@ -574,31 +612,11 @@ impl Analyzer {
                                 ),
                                 suggestion: "Verify timelock delay is enforced before upgrade".to_string(),
                             });
->>>>>>> 6856cf4 (closes 47)
                         }
                     }
                 }
             }
         }
-<<<<<<< HEAD
-        estimations
-    }
-
-    fn estimate_enum_size(&self, e: &syn::ItemEnum) -> usize {
-        const DISCRIMINANT_SIZE: usize = 4;
-        let mut max_variant = 0usize;
-        for v in &e.variants {
-            let mut variant_size = 0;
-            match &v.fields {
-                Fields::Named(fields) => { for f in &fields.named { variant_size += self.estimate_type_size(&f.ty); } }
-                Fields::Unnamed(fields) => { for f in &fields.unnamed { variant_size += self.estimate_type_size(&f.ty); } }
-                Fields::Unit => {}
-            }
-            max_variant = max_variant.max(variant_size);
-        }
-        DISCRIMINANT_SIZE + max_variant
-    }
-=======
 
         // Storage layout suggestions
         if report.storage_types.len() > 1 {
@@ -623,7 +641,21 @@ impl Analyzer {
     }
 
     // ── Size estimation helpers ───────────────────────────────────────────────
->>>>>>> 6856cf4 (closes 47)
+
+    fn estimate_enum_size(&self, e: &syn::ItemEnum) -> usize {
+        const DISCRIMINANT_SIZE: usize = 4;
+        let mut max_variant = 0usize;
+        for v in &e.variants {
+            let mut variant_size = 0;
+            match &v.fields {
+                Fields::Named(fields) => { for f in &fields.named { variant_size += self.estimate_type_size(&f.ty); } }
+                Fields::Unnamed(fields) => { for f in &fields.unnamed { variant_size += self.estimate_type_size(&f.ty); } }
+                Fields::Unit => {}
+            }
+            max_variant = max_variant.max(variant_size);
+        }
+        DISCRIMINANT_SIZE + max_variant
+    }
 
     fn estimate_struct_size(&self, s: &syn::ItemStruct) -> usize {
         let mut total = 0;
@@ -662,143 +694,8 @@ fn has_contracttype(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().any(|attr| if let Meta::Path(path) = &attr.meta { path.is_ident("contracttype") || path.segments.iter().any(|s| s.ident == "contracttype") } else { false })
 }
 
-<<<<<<< HEAD
 fn classify_size(size: usize, limit: usize, approaching: usize, strict: bool, strict_threshold: usize) -> Option<SizeWarningLevel> {
     if size > limit { Some(SizeWarningLevel::ExceedsLimit) } else if size > approaching || (strict && size > strict_threshold) { Some(SizeWarningLevel::ApproachingLimit) } else { None }
-=======
-impl<'ast> Visit<'ast> for UnsafeVisitor {
-    fn visit_expr_method_call(&mut self, i: &'ast syn::ExprMethodCall) {
-        let method_name = i.method.to_string();
-        if method_name == "unwrap" || method_name == "expect" {
-            let pattern_type = if method_name == "unwrap" {
-                PatternType::Unwrap
-            } else {
-                PatternType::Expect
-            };
-            self.patterns.push(UnsafePattern {
-                pattern_type,
-                snippet: quote::quote!(#i).to_string(),
-                line: 0, // Simplified for now
-            });
-        }
-        visit::visit_expr_method_call(self, i);
-    }
-
-    fn visit_expr_macro(&mut self, i: &'ast syn::ExprMacro) {
-        if i.mac.path.is_ident("panic") {
-            self.patterns.push(UnsafePattern {
-                pattern_type: PatternType::Panic,
-                snippet: quote::quote!(#i).to_string(),
-                line: 0,
-            });
-        }
-        visit::visit_expr_macro(self, i);
-    }
-}
-
-/// Trait for contracts that can validate their invariant at runtime.
-pub trait SanctifiedGuard {
-    fn check_invariant(&self, env: &Env) -> Result<(), String>;
-}
-
-// ── ArithVisitor ──────────────────────────────────────────────────────────────
-
-struct ArithVisitor {
-    issues: Vec<ArithmeticIssue>,
-    /// Name of the function currently being visited.
-    current_fn: Option<String>,
-    /// De-duplicates issues: one per (function_name, operator) pair.
-    seen: HashSet<(String, String)>,
-}
-
-impl ArithVisitor {
-    /// Returns `(operator_str, suggestion_text)` for overflow-prone binary ops,
-    /// or `None` for operators that cannot overflow (comparisons, bitwise, etc).
-    fn classify_op(op: &syn::BinOp) -> Option<(&'static str, &'static str)> {
-        match op {
-            syn::BinOp::Add(_) => Some((
-                "+",
-                "Use `.checked_add(rhs)` or `.saturating_add(rhs)` to handle overflow",
-            )),
-            syn::BinOp::Sub(_) => Some((
-                "-",
-                "Use `.checked_sub(rhs)` or `.saturating_sub(rhs)` to handle underflow",
-            )),
-            syn::BinOp::Mul(_) => Some((
-                "*",
-                "Use `.checked_mul(rhs)` or `.saturating_mul(rhs)` to handle overflow",
-            )),
-            syn::BinOp::AddAssign(_) => Some((
-                "+=",
-                "Replace `a += b` with `a = a.checked_add(b).expect(\"overflow\")`",
-            )),
-            syn::BinOp::SubAssign(_) => Some((
-                "-=",
-                "Replace `a -= b` with `a = a.checked_sub(b).expect(\"underflow\")`",
-            )),
-            syn::BinOp::MulAssign(_) => Some((
-                "*=",
-                "Replace `a *= b` with `a = a.checked_mul(b).expect(\"overflow\")`",
-            )),
-            _ => None,
-        }
-    }
-}
-
-impl<'ast> Visit<'ast> for ArithVisitor {
-    /// Track the current function when descending into an impl method.
-    fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
-        let prev = self.current_fn.take();
-        self.current_fn = Some(node.sig.ident.to_string());
-        visit::visit_impl_item_fn(self, node);
-        self.current_fn = prev;
-    }
-
-    /// Also handle top-level `fn` items (helper functions outside impls).
-    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
-        let prev = self.current_fn.take();
-        self.current_fn = Some(node.sig.ident.to_string());
-        visit::visit_item_fn(self, node);
-        self.current_fn = prev;
-    }
-
-    fn visit_expr_binary(&mut self, node: &'ast syn::ExprBinary) {
-        if let Some(fn_name) = self.current_fn.clone() {
-            if let Some((op_str, suggestion)) = Self::classify_op(&node.op) {
-                // Skip concatenation of string literals (false positive for `+`)
-                if !is_string_literal(&node.left) && !is_string_literal(&node.right) {
-                    let key = (fn_name.clone(), op_str.to_string());
-                    if !self.seen.contains(&key) {
-                        self.seen.insert(key);
-                        // Line number from the left operand's span
-                        let line = node.left.span().start().line;
-                        self.issues.push(ArithmeticIssue {
-                            function_name: fn_name.clone(),
-                            operation: op_str.to_string(),
-                            suggestion: suggestion.to_string(),
-                            location: format!("{}:{}", fn_name, line),
-                        });
-                    }
-                }
-            }
-        }
-        // Continue descending so nested binary ops are also checked
-        visit::visit_expr_binary(self, node);
-    }
-}
-
-/// Returns `true` if the expression is a string literal — used to avoid
-/// false-positives on `+` for string concatenation (rare in no_std Soroban
-/// but included for correctness).
-fn is_string_literal(expr: &syn::Expr) -> bool {
-    matches!(
-        expr,
-        syn::Expr::Lit(syn::ExprLit {
-            lit: syn::Lit::Str(_),
-            ..
-        })
-    )
->>>>>>> 6856cf4 (closes 47)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -869,9 +766,8 @@ impl<'ast> Visit<'ast> for UnsafeVisitor {
             let line = node.path.get_ident().map(|i| i.span().start().line).unwrap_or(0);
             self.patterns.push(UnsafePattern { pattern_type: PatternType::Panic, line, snippet: "panic!()".to_string() });
         }
-        visit::visit_macro(self, node);
+        syn::visit::visit_macro(self, node);
     }
-<<<<<<< HEAD
     fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
         let method = node.method.to_string();
         if method == "unwrap" || method == "expect" {
@@ -879,10 +775,15 @@ impl<'ast> Visit<'ast> for UnsafeVisitor {
             let pattern_type = if method == "unwrap" { PatternType::Unwrap } else { PatternType::Expect };
             self.patterns.push(UnsafePattern { pattern_type, line, snippet: format!(".{}()", method) });
         }
-        visit::visit_expr_method_call(self, node);
-=======
+        syn::visit::visit_expr_method_call(self, node);
+    }
+}
 
-    // ── Arithmetic overflow tests ─────────────────────────────────────────────
+// ── Tests (Continued) ─────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests_continued {
+    use super::*;
 
     #[test]
     fn test_scan_arithmetic_overflow_basic() {
@@ -1045,12 +946,11 @@ impl<'ast> Visit<'ast> for UnsafeVisitor {
         assert!(issues[0].suggestion.contains("checked_add"));
         // Location should include function name
         assert!(issues[0].location.starts_with("risky:"));
->>>>>>> 6856cf4 (closes 47)
     }
 
     #[test]
     fn test_token_with_bugs() {
-        let analyzer = Analyzer::new(false);
+        let analyzer = Analyzer::new(SanctifyConfig::default());
         let source = r#"
             #![no_std]
             use soroban_sdk::{contract, contractimpl, symbol_short, Env, String, Address, Symbol, Val};
@@ -1482,13 +1382,13 @@ impl<'ast> Visit<'ast> for ArithVisitor {
     fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
         let prev = self.current_fn.take();
         self.current_fn = Some(node.sig.ident.to_string());
-        visit::visit_impl_item_fn(self, node);
+        syn::visit::visit_impl_item_fn(self, node);
         self.current_fn = prev;
     }
     fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
         let prev = self.current_fn.take();
         self.current_fn = Some(node.sig.ident.to_string());
-        visit::visit_item_fn(self, node);
+        syn::visit::visit_item_fn(self, node);
         self.current_fn = prev;
     }
     fn visit_expr_binary(&mut self, node: &'ast syn::ExprBinary) {
@@ -1504,7 +1404,7 @@ impl<'ast> Visit<'ast> for ArithVisitor {
                 }
             }
         }
-        visit::visit_expr_binary(self, node);
+        syn::visit::visit_expr_binary(self, node);
     }
 }
 

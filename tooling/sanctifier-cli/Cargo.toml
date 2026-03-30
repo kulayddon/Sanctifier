@@ -20,11 +20,24 @@ colored = "2.0"
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 regex = "1.10.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+rayon = "1.8"
+reqwest = { version = "0.11", features = ["blocking", "json"] }
+
+[dev-dependencies]
+tempfile = "3.8"
+mockito = "1.2"
+predicates = "3.0"
+assert_cmd = "2.0"
+jsonschema = "0.17"
+tokio = { version = "1.0", features = ["full"] }
 
 [[bin]]
 name = "sanctifier"
 path = "src/main.rs"
 
-[dev-dependencies]
-assert_cmd = "2.1.2"
-predicates = "3.1.4"
+[build-dependencies]
+regex = "1.10.3"
+vergen = { version = "8", features = ["build", "cargo", "git", "git2", "rustc", "si"] }
+

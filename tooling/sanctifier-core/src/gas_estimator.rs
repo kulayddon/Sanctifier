@@ -63,12 +63,6 @@ impl GasEstimator {
     }
 }
 
-impl Default for GasEstimator {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 struct GasEstimationVisitor {
     function_name: String,
     instruction_count: usize,

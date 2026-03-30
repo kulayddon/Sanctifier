@@ -1,7 +1,17 @@
-use crate::StorageCollisionIssue;
+use serde::Serialize;
+use syn::visit::{self, Visit};
+use syn::{Expr, ExprCall, ExprMacro, ItemConst, Lit};
+use syn::spanned::Spanned;
 use std::collections::HashMap;
 use quote::quote;
-use syn::spanned::Spanned;
+
+#[derive(Debug, Serialize, Clone)]
+pub struct StorageCollisionIssue {
+    pub key_value: String,
+    pub key_type: String,
+    pub location: String,
+    pub message: String,
+}
 
 pub struct StorageVisitor {
     pub collisions: Vec<StorageCollisionIssue>,
@@ -69,7 +79,7 @@ impl<'ast> Visit<'ast> for StorageVisitor {
                 self.add_key(val, "const".to_string(), key_name, i.span().start().line);
             }
         }
-        visit::visit_item_const(self, i);
+        syn::visit::visit_item_const(self, i);
     }
 
     fn visit_expr_call(&mut self, i: &'ast ExprCall) {
@@ -91,7 +101,7 @@ impl<'ast> Visit<'ast> for StorageVisitor {
                 }
             }
         }
-        visit::visit_expr_call(self, i);
+        syn::visit::visit_expr_call(self, i);
     }
 
     fn visit_expr_macro(&mut self, i: &'ast ExprMacro) {
@@ -103,6 +113,6 @@ impl<'ast> Visit<'ast> for StorageVisitor {
             let val = token_str.trim_matches('"').to_string();
             self.add_key(val, "symbol_short!".to_string(), "inline".to_string(), i.span().start().line);
         }
-        visit::visit_expr_macro(self, i);
+        syn::visit::visit_expr_macro(self, i);
     }
 }
